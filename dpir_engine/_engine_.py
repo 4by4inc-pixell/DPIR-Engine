@@ -1,11 +1,11 @@
 """DPIR Engine Module"""
 import os
-from typing import Any, List, Tuple
+from typing import Any, List, Optional
 import torch
-import onnxruntime as ort
+import onnxruntime as ort  # ORT 선언 전 torch import 필수
 import numpy as np
 from ortei import IORTEngine
-import onnx
+
 
 __all__ = ["DPIREngine"]
 
@@ -21,15 +21,18 @@ class DPIREngine(IORTEngine):
         model_batch=1,
         input_height=1080,
         input_width=1920,
+        providers: Optional[list] = None,
     ) -> None:
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ["CUDA_VISIBLE_DEVICES"] = f"{device_id}"
+
         if device_name == "cuda":
             assert torch.cuda.is_available(), "ERROR::CUDA not available."
 
-        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        os.environ["CUDA_VISIBLE_DEVICES"] = f"{device_id}"
         self.onnx_path = onnx_path
         self.device_name = device_name
         self.device_id = device_id
+        self.providers = providers
         self.io_shape = {
             "input": [model_batch, 3 + 1, input_height, input_width],
             "output": [model_batch, 3, input_height, input_width],
@@ -37,40 +40,46 @@ class DPIREngine(IORTEngine):
 
         # ort.set_default_logger_severity(0) # Turn on verbose mode for ORT TRT
         os.environ["CUDA_MODULE_LOADING"] = "LAZY"
-        self.providers = [
-            (
-                "TensorrtExecutionProvider",
-                {
-                    "device_id": 0,
-                    "trt_fp16_enable": True,
-                    "trt_int8_enable": False,
-                    "trt_int8_use_native_calibration_table": False,
-                    "trt_engine_cache_enable": False,
-                    "trt_int8_calibration_table_name": "calibration.flatbuffers",
-                    "trt_engine_cache_path": "./local/",
-                    "trt_max_workspace_size": 2147483648,
-                    # 'trt_force_sequential_engine_build' : True,
-                    "trt_dla_enable": False,
-                    "trt_dla_core": 0,
-                    "trt_max_partition_iterations": 10,
-                    # 'trt_auxiliary_streams' : 0,
-                    "trt_sparsity_enable": True,
-                    # 'trt_timing_cache_enable' : trt_timing_cache_enable,
-                    "trt_profile_min_shapes": f"{list(self.io_shape.keys())[0]}:{model_batch}x{4}x{input_height}x{input_width}",
-                    "trt_profile_max_shapes": f"{list(self.io_shape.keys())[0]}:{model_batch}x{4}x{input_height}x{input_width}",
-                    "trt_profile_opt_shapes": f"{list(self.io_shape.keys())[0]}:{model_batch}x{4}x{input_height}x{input_width}",
-                },
-            ),
-            (
-                "CUDAExecutionProvider",
-                {
-                    # 'enable_cuda_graph': True,
-                    "cudnn_conv_use_max_workspace": "1",
-                    "cudnn_conv_algo_search": "EXHAUSTIVE",  # HEURISTIC',
-                    "do_copy_in_default_stream": True,
-                },
-            ),
-        ]
+        if providers is None:
+            self.providers = [
+                (
+                    "TensorrtExecutionProvider",
+                    {
+                        "trt_fp16_enable": True,
+                        "trt_int8_enable": False,
+                        "trt_int8_use_native_calibration_table": False,
+                        "trt_engine_cache_enable": False,
+                        "trt_int8_calibration_table_name": "calibration.flatbuffers",
+                        "trt_engine_cache_path": "./local/",
+                        "trt_max_workspace_size": 2147483648,
+                        # 'trt_force_sequential_engine_build' : True,
+                        # "trt_dla_enable": False,
+                        # "trt_dla_core": 0,
+                        # "trt_max_partition_iterations": 10,
+                        # 'trt_auxiliary_streams' : 0,
+                        # "trt_sparsity_enable": True,
+                        # 'trt_timing_cache_enable' : trt_timing_cache_enable,
+                        # "trt_profile_min_shapes": f"{list(self.io_shape.keys())[0]}:{model_batch}x{4}x{input_height}x{input_width}",
+                        # "trt_profile_max_shapes": f"{list(self.io_shape.keys())[0]}:{model_batch}x{4}x{input_height}x{input_width}",
+                        # "trt_profile_opt_shapes": f"{list(self.io_shape.keys())[0]}:{model_batch}x{4}x{input_height}x{input_width}",
+                    },
+                ),
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        # 'enable_cuda_graph': True,
+                        "cudnn_conv_use_max_workspace": "1",
+                        "cudnn_conv_algo_search": "EXHAUSTIVE",  # HEURISTIC',
+                        "do_copy_in_default_stream": True,
+                    },
+                ),
+            ]
+
+        for _prov in self.providers:
+            _pname, _poption = _prov
+            assert all(
+                [_key != "device_id" for _key in list(_poption.keys())]
+            ), "provider option - device_id is not supported."
 
         # init
         super().__init__()
@@ -107,7 +116,9 @@ class DPIREngine(IORTEngine):
         }
         self.io_data_ort = {
             key: ort.OrtValue.ortvalue_from_numpy(
-                self.io_data_cpu[key], device_name, device_id
+                self.io_data_cpu[key],
+                device_name,
+                device_id=0,  # device_id 설정시 오류 발생
             )
             for key in self.io_data_cpu
         }
