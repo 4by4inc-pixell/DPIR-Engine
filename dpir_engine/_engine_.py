@@ -23,6 +23,7 @@ class DPIREngine(IORTEngine):
         input_width=1920,
         providers: Optional[list] = None,
     ) -> None:
+        print(f"DPIREngine[{device_id}]::Init::Start")
         os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ["CUDA_VISIBLE_DEVICES"] = f"{device_id}"
 
@@ -87,6 +88,7 @@ class DPIREngine(IORTEngine):
 
         # warm-up
         self.inference()
+        print(f"DPIREngine[{device_id}]::Init::End")
 
     def _init_members(self):
         # set variable
